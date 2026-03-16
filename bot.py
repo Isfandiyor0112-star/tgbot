@@ -64,43 +64,50 @@ def handle_location(message):
     except Exception as e:
         bot.send_message(message.chat.id, "Xatolik yuz berdi, iltimos qaytadan urinib ko'ring.")
 
-@bot.callback_query_handler(func=lambda call: True)
+ @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
     try:
         data = call.data.split("|")
         cat, lat, lon = data[0], float(data[1]), float(data[2])
 
-        # Область поиска 2км
-        delta = 0.02 
-        viewbox = f"{lon-delta},{lat+delta},{lon+delta},{lat-delta}"
-
+        # Удаляем delta и viewbox, используем более мощный поиск
         url = "https://nominatim.openstreetmap.org/search"
+        
         params = {
-            'q': cat,
+            'q': cat,           # Что ищем (restaurant, atm и т.д.)
             'format': 'json',
-            'limit': 5,
-            'viewbox': viewbox,
-            'bounded': 1
+            'limit': 10,          # Покажем 10 лучших мест
+            'lat': lat,          # Центр поиска (широта пользователя)
+            'lon': lon,          # Центр поиска (долгота пользователя)
+            'addressdetails': 1
         }
 
-        resp = requests.get(url, headers={'User-Agent': 'GeoBot-App'}, params=params)
-        results = resp.json()
+        # Nominatim поймет, что нужно искать категорию 'cat' максимально близко к 'lat, lon'
+        resp = requests.get(url, headers={'User-Agent': 'GeoBot-App'}, params=params).json()
 
-        if not results:
-            bot.send_message(call.message.chat.id, "Hech narsa topilmadi 😕")
+        if not resp:
+            bot.send_message(call.message.chat.id, "😕 Atrofda hech narsa topilmadi.")
             return
 
-        text = f"🗺 <b>Eng yaqin joylar ({cat}):</b>\n\n"
-        for place in results:
-            name = place.get('display_name', 'Noma’lum joy').split(',')[0]
+        text = f"🗺 <b>{cat.capitalize()}lar (Sizga eng yaqin):</b>\n\n"
+        
+        for place in resp:
+            # Извлекаем название и город для красоты
+            address = place.get('address', {})
+            name = address.get('name') or place.get('display_name', '').split(',')[0]
+            city = address.get('city') or address.get('town') or address.get('village') or ""
+            
             plat, plon = place['lat'], place['lon']
-            # Твоя ссылка на карты
-            map_link = f"https://www.google.com/maps?q={plat},{plon}"
-            text += f"📍 <b>{name}</b>\n<a href='{map_link}'>Xaritada ko‘rish</a>\n\n"
+            map_link = f"https://www.google.com/maps/search/?api=1&query={plat},{plon}"
+            
+            text += f"📍 <b>{name}</b> {f'({city})' if city else ''}\n"
+            text += f"<a href='{map_link}'>Xaritada ko‘rish</a>\n\n"
 
         bot.send_message(call.message.chat.id, text, parse_mode="HTML", disable_web_page_preview=True)
     except Exception as e:
+        print(f"Error: {e}")
         bot.answer_callback_query(call.id, "Xatolik yuz berdi.")
+
 
 # --- Запуск ---
 if __name__ == "__main__":
