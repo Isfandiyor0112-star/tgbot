@@ -7,15 +7,16 @@ import socketserver
 from threading import Thread
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 
-# --- Настройка порта для Render (Health Check) ---
+# --- 1. Настройка порта для Render (Health Check) ---
 def run_health_check_server():
+    # Render дает порт через переменную окружения PORT
     port = int(os.environ.get("PORT", 8080))
     handler = http.server.SimpleHTTPRequestHandler
-    handler.log_message = lambda *args: None
+    handler.log_message = lambda *args: None  # Чтобы не спамить логами
     with socketserver.TCPServer(("", port), handler) as httpd:
         httpd.serve_forever()
 
-# --- Инициализация бота ---
+# --- 2. Инициализация бота ---
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -33,9 +34,9 @@ def start_cmd(message):
 def handle_location(message):
     lat, lon = message.location.latitude, message.location.longitude
     try:
-        # Узнаем, где находится пользователь
-        rev_url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=10&addressdetails=1"
-        resp = requests.get(rev_url, headers={'User-Agent': 'GeoBot-App-v2'}).json()
+        # Узнаем адрес пользователя
+        rev_url = f"https://nominatim.openstreetmap.org/reverse?format=json&lat={lat}&lon={lon}&zoom=14&addressdetails=1"
+        resp = requests.get(rev_url, headers={'User-Agent': 'Uzbek_GeoBot_v4'}).json()
         
         display_name = resp.get("display_name", "Joylashuv aniqlandi")
 
@@ -46,6 +47,7 @@ def handle_location(message):
         )
 
         kb = InlineKeyboardMarkup()
+        # Категории поиска
         categories = {
             "🍴 Restoran": "restaurant",
             "💊 Dorixona": "pharmacy",
@@ -58,7 +60,7 @@ def handle_location(message):
 
         bot.send_message(message.chat.id, "Nima qidiramiz?", reply_markup=kb)
     except Exception as e:
-        bot.send_message(message.chat.id, "Xatolik yuz berdi, iltimos qaytadan urinib ko'ring.")
+        bot.send_message(message.chat.id, "Xatolik yuz berdi. Qayta urinib ko'ring.")
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_handler(call):
@@ -66,8 +68,8 @@ def callback_handler(call):
         data = call.data.split("|")
         cat, lat, lon = data[0], float(data[1]), float(data[2])
 
-        # Ограничиваем поиск квадратом ~30 км (0.25 градуса)
-        delta = 0.25 
+        # СТРОГАЯ РАМКА: ~35 км вокруг пользователя
+        delta = 0.3 
         viewbox = f"{lon-delta},{lat+delta},{lon+delta},{lat-delta}"
 
         url = "https://nominatim.openstreetmap.org/search"
@@ -76,42 +78,44 @@ def callback_handler(call):
             'format': 'json',
             'limit': 10,
             'viewbox': viewbox,
-            'bounded': 1,  # СТРОГО внутри квадрата (никакой Мексики)
-            'addressdetails': 1
+            'bounded': 1,      # СТРОГО: Искать только внутри этой рамки
+            'addressdetails': 1,
+            'accept-language': 'uz,ru'
         }
 
-        resp = requests.get(url, headers={'User-Agent': 'GeoBot-App-v2'}, params=params).json()
+        resp = requests.get(url, headers={'User-Agent': 'Uzbek_GeoBot_v4'}, params=params).json()
 
         if not resp:
-            bot.send_message(call.message.chat.id, "😕 Afsuski, 30 km radiusda hech narsa topilmadi.")
+            bot.send_message(call.message.chat.id, "😕 Afsuski, yaqin atrofda hech narsa topilmadi.")
             return
 
-        text = f"🗺 <b>{cat.capitalize()}lar (Yaqin atrofda):</b>\n\n"
+        text = f"🗺 <b>Yaqin atrofdagi {cat}lar:</b>\n\n"
         
         for place in resp:
-            address = place.get('address', {})
-            # Пытаемся найти нормальное название объекта
-            name = address.get('name') or address.get('shop') or address.get('amenity') or place.get('display_name', '').split(',')[0]
-            city = address.get('city') or address.get('town') or address.get('village') or ""
+            addr = place.get('address', {})
+            # Берем самое адекватное имя объекта
+            name = addr.get('name') or addr.get('shop') or addr.get('amenity') or place.get('display_name', '').split(',')[0]
+            # Город или район
+            village = addr.get('village') or addr.get('town') or addr.get('city') or ""
             
             plat, plon = place['lat'], place['lon']
-            # Официальный формат ссылки Google Maps
+            # Ссылка на Google Maps
             map_link = f"https://www.google.com/maps/search/?api=1&query={plat},{plon}"
             
-            text += f"📍 <b>{name}</b> {f'({city})' if city else ''}\n"
+            text += f"📍 <b>{name}</b> {f'({village})' if village else ''}\n"
             text += f"<a href='{map_link}'>Xaritada ko‘rish</a>\n\n"
 
         bot.send_message(call.message.chat.id, text, parse_mode="HTML", disable_web_page_preview=True)
     except Exception as e:
-        bot.answer_callback_query(call.id, "Xatolik yuz berdi.")
+        bot.answer_callback_query(call.id, "Xatolik!")
 
-# --- Запуск ---
+# --- 3. Запуск ---
 if __name__ == "__main__":
-    # Запускаем Health Check сервер для Render
+    # Поток для порта (чтобы Render не вырубал бота)
     Thread(target=run_health_check_server, daemon=True).start()
     
     print("Бот запущен...")
-    # Бесконечный цикл с защитой от вылетов
+    # Бесконечный цикл работы
     while True:
         try:
             bot.infinity_polling(timeout=20, long_polling_timeout=5)
